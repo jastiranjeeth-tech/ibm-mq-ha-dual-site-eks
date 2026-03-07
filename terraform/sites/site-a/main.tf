@@ -43,6 +43,9 @@ module "eks" {
     mq_nodes = {
       name = "${var.cluster_name}-ng"
 
+      iam_role_use_name_prefix = false
+      iam_role_name            = "${var.cluster_name}-node-role"
+
       instance_types = [var.node_instance_type]
       capacity_type  = var.enable_spot_instances ? "SPOT" : "ON_DEMAND"
 
