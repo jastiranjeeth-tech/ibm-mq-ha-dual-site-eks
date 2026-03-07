@@ -9,23 +9,25 @@ on:
       - main
   workflow_dispatch:
     inputs:
-      deploy_target:
-        description: 'Deployment target'
+      action:
+        description: 'Action to perform'
         required: true
-        default: 'site-a'
         type: choice
         options:
-          - site-a
-          - site-b
-          - both
+          - deploy-site-a
+          - deploy-site-b
+          - deploy-both
+          - destroy-site-a
+          - destroy-site-b
+          - destroy-both
       site_a_region:
         description: 'AWS region for site-a'
-        required: true
+        required: false
         default: 'us-east-1'
         type: string
       site_b_region:
         description: 'AWS region for site-b'
-        required: true
+        required: false
         default: 'us-west-2'
         type: string
 
@@ -75,8 +77,29 @@ jobs:
           sudo apt-get install -y shellcheck
           shellcheck scripts/*.sh
 
+  terraform_plan:
+    if: github.event_name != 'workflow_dispatch'
+    needs: ci
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        site: [site-a, site-b]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.6'
+
+      - name: Terraform Plan for ${{ matrix.site }}
+        run: |
+          terraform -chdir=terraform/sites/${{ matrix.site }} init -backend=false
+          terraform -chdir=terraform/sites/${{ matrix.site }} plan
+
   cd_deploy_site_a:
-    if: github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'site-a' || inputs.deploy_target == 'both')
+    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'deploy-site-a' || inputs.action == 'deploy-both')
     needs: ci
     runs-on: ubuntu-latest
     environment: site-a-approval
@@ -101,9 +124,13 @@ jobs:
         with:
           terraform_version: '1.6.6'
 
-      - name: Deploy Terraform for selected site
+      - name: Terraform Plan for site-a
         run: |
           terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} plan
+
+      - name: Deploy Terraform for site-a
+        run: |
           terraform -chdir=terraform/sites/${SITE} apply -auto-approve
 
       - name: Update kubeconfig
@@ -111,7 +138,7 @@ jobs:
           CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
 
-      - name: Deploy MQ manifests for selected site
+      - name: Deploy MQ manifests for site-a
         run: |
           chmod +x scripts/deploy-site-mq-ha.sh
           scripts/deploy-site-mq-ha.sh ${SITE}
@@ -122,7 +149,7 @@ jobs:
           kubectl get svc -n ibm-mq mq-ha-service
 
   cd_deploy_site_b:
-    if: github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'site-b' || inputs.deploy_target == 'both')
+    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'deploy-site-b' || inputs.action == 'deploy-both')
     needs: ci
     runs-on: ubuntu-latest
     environment: site-b-approval
@@ -147,9 +174,13 @@ jobs:
         with:
           terraform_version: '1.6.6'
 
-      - name: Deploy Terraform for selected site
+      - name: Terraform Plan for site-b
         run: |
           terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} plan
+
+      - name: Deploy Terraform for site-b
+        run: |
           terraform -chdir=terraform/sites/${SITE} apply -auto-approve
 
       - name: Update kubeconfig
@@ -157,7 +188,7 @@ jobs:
           CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
 
-      - name: Deploy MQ manifests for selected site
+      - name: Deploy MQ manifests for site-b
         run: |
           chmod +x scripts/deploy-site-mq-ha.sh
           scripts/deploy-site-mq-ha.sh ${SITE}
@@ -166,3 +197,83 @@ jobs:
         run: |
           kubectl get pods -n ibm-mq
           kubectl get svc -n ibm-mq mq-ha-service
+
+  cd_destroy_site_a:
+    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'destroy-site-a' || inputs.action == 'destroy-both')
+    runs-on: ubuntu-latest
+    environment: site-a-destroy-approval
+    env:
+      SITE: site-a
+      AWS_REGION: ${{ inputs.site_a_region }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.6'
+
+      - name: Update kubeconfig
+        run: |
+          CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name 2>/dev/null || echo "mq-ha-${SITE}")
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION" || true
+
+      - name: Delete MQ resources
+        run: |
+          kubectl delete -f k8s/${SITE}/ --ignore-not-found=true || true
+          kubectl delete namespace ibm-mq --ignore-not-found=true || true
+
+      - name: Terraform Destroy for site-a
+        run: |
+          terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} destroy -auto-approve
+
+  cd_destroy_site_b:
+    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'destroy-site-b' || inputs.action == 'destroy-both')
+    runs-on: ubuntu-latest
+    environment: site-b-destroy-approval
+    env:
+      SITE: site-b
+      AWS_REGION: ${{ inputs.site_b_region }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.6'
+
+      - name: Update kubeconfig
+        run: |
+          CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name 2>/dev/null || echo "mq-ha-${SITE}")
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION" || true
+
+      - name: Delete MQ resources
+        run: |
+          kubectl delete -f k8s/${SITE}/ --ignore-not-found=true || true
+          kubectl delete namespace ibm-mq --ignore-not-found=true || true
+
+      - name: Terraform Destroy for site-b
+        run: |
+          terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} destroy -auto-approve
