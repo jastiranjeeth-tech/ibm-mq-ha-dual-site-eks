@@ -1,0 +1,170 @@
+name: MQHA EKS CI/CD
+
+on:
+  push:
+    paths:
+      - 'MQHA_EKS/**'
+      - '.github/workflows/mqha-eks-ci-cd.yml'
+  pull_request:
+    paths:
+      - 'MQHA_EKS/**'
+      - '.github/workflows/mqha-eks-ci-cd.yml'
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: 'Deployment target'
+        required: true
+        default: 'site-a'
+        type: choice
+        options:
+          - site-a
+          - site-b
+          - both
+      site_a_region:
+        description: 'AWS region for site-a'
+        required: true
+        default: 'us-east-1'
+        type: string
+      site_b_region:
+        description: 'AWS region for site-b'
+        required: true
+        default: 'us-west-2'
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.6'
+
+      - name: Terraform format check
+        run: terraform -chdir=MQHA_EKS/terraform fmt -check -recursive
+
+      - name: Terraform init+validate site-a
+        run: |
+          terraform -chdir=MQHA_EKS/terraform/sites/site-a init -backend=false
+          terraform -chdir=MQHA_EKS/terraform/sites/site-a validate
+
+      - name: Terraform init+validate site-b
+        run: |
+          terraform -chdir=MQHA_EKS/terraform/sites/site-b init -backend=false
+          terraform -chdir=MQHA_EKS/terraform/sites/site-b validate
+
+      - name: Terraform init+validate global-dns
+        run: |
+          terraform -chdir=MQHA_EKS/terraform/global-dns init -backend=false
+          terraform -chdir=MQHA_EKS/terraform/global-dns validate
+
+      - name: Validate Kubernetes YAML syntax
+        run: |
+          python -m pip install --upgrade pip
+          pip install yamllint
+          yamllint MQHA_EKS/k8s
+
+      - name: Shell script lint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck MQHA_EKS/scripts/*.sh
+
+  cd_deploy_site_a:
+    if: github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'site-a' || inputs.deploy_target == 'both')
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: site-a-approval
+    env:
+      SITE: site-a
+      AWS_REGION: ${{ inputs.site_a_region }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.6'
+
+      - name: Deploy Terraform for selected site
+        run: |
+          terraform -chdir=MQHA_EKS/terraform/sites/${SITE} init
+          terraform -chdir=MQHA_EKS/terraform/sites/${SITE} apply -auto-approve
+
+      - name: Update kubeconfig
+        run: |
+          CLUSTER_NAME=$(terraform -chdir=MQHA_EKS/terraform/sites/${SITE} output -raw cluster_name)
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Deploy MQ manifests for selected site
+        run: |
+          chmod +x MQHA_EKS/scripts/deploy-site-mq-ha.sh
+          MQHA_EKS/scripts/deploy-site-mq-ha.sh ${SITE}
+
+      - name: Post-deploy status
+        run: |
+          kubectl get pods -n ibm-mq
+          kubectl get svc -n ibm-mq mq-ha-service
+
+  cd_deploy_site_b:
+    if: github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'site-b' || inputs.deploy_target == 'both')
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: site-b-approval
+    env:
+      SITE: site-b
+      AWS_REGION: ${{ inputs.site_b_region }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.6'
+
+      - name: Deploy Terraform for selected site
+        run: |
+          terraform -chdir=MQHA_EKS/terraform/sites/${SITE} init
+          terraform -chdir=MQHA_EKS/terraform/sites/${SITE} apply -auto-approve
+
+      - name: Update kubeconfig
+        run: |
+          CLUSTER_NAME=$(terraform -chdir=MQHA_EKS/terraform/sites/${SITE} output -raw cluster_name)
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Deploy MQ manifests for selected site
+        run: |
+          chmod +x MQHA_EKS/scripts/deploy-site-mq-ha.sh
+          MQHA_EKS/scripts/deploy-site-mq-ha.sh ${SITE}
+
+      - name: Post-deploy status
+        run: |
+          kubectl get pods -n ibm-mq
+          kubectl get svc -n ibm-mq mq-ha-service

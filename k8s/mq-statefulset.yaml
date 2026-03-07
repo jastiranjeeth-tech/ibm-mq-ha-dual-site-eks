@@ -1,0 +1,134 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mq-ha-service
+  namespace: ibm-mq
+spec:
+  type: LoadBalancer
+  selector:
+    app: mq-ha
+  ports:
+    - name: qmgr
+      port: 1414
+      targetPort: 1414
+      protocol: TCP
+    - name: console
+      port: 9443
+      targetPort: 9443
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mq-ha-headless
+  namespace: ibm-mq
+spec:
+  clusterIP: None
+  selector:
+    app: mq-ha
+  ports:
+    - name: qmgr
+      port: 1414
+      targetPort: 1414
+    - name: console
+      port: 9443
+      targetPort: 9443
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mq-ha
+  namespace: ibm-mq
+spec:
+  serviceName: mq-ha-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mq-ha
+  template:
+    metadata:
+      labels:
+        app: mq-ha
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - mq-ha
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: mq
+          image: icr.io/ibm-messaging/mq:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LICENSE
+              value: "accept"
+            - name: MQ_QMGR_NAME
+              value: "QMHA"
+            - name: MQ_MULTI_INSTANCE
+              value: "true"
+            - name: MQ_NATIVE_HA
+              value: "true"
+            - name: MQ_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mq-ha-secret
+                  key: adminPassword
+            - name: MQ_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mq-ha-secret
+                  key: appPassword
+          ports:
+            - containerPort: 1414
+              name: qmgr
+            - containerPort: 9443
+              name: console
+          volumeMounts:
+            - name: data
+              mountPath: /mnt/mqm
+            - name: config
+              mountPath: /etc/mqm/20-config.mqsc
+              subPath: mqsc.ini
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          livenessProbe:
+            exec:
+              command:
+                - chkmqhealthy
+            initialDelaySeconds: 90
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 1
+          readinessProbe:
+            exec:
+              command:
+                - chkmqready
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 1
+      volumes:
+        - name: config
+          configMap:
+            name: mq-ha-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: mq-storage
+        resources:
+          requests:
+            storage: 10Gi
