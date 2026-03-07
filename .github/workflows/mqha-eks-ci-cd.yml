@@ -2,13 +2,11 @@ name: MQHA EKS CI/CD
 
 on:
   push:
-    paths:
-      - 'MQHA_EKS/**'
-      - '.github/workflows/mqha-eks-ci-cd.yml'
+    branches:
+      - main
   pull_request:
-    paths:
-      - 'MQHA_EKS/**'
-      - '.github/workflows/mqha-eks-ci-cd.yml'
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       deploy_target:
@@ -48,34 +46,34 @@ jobs:
           terraform_version: '1.6.6'
 
       - name: Terraform format check
-        run: terraform -chdir=MQHA_EKS/terraform fmt -check -recursive
+        run: terraform -chdir=terraform fmt -check -recursive
 
       - name: Terraform init+validate site-a
         run: |
-          terraform -chdir=MQHA_EKS/terraform/sites/site-a init -backend=false
-          terraform -chdir=MQHA_EKS/terraform/sites/site-a validate
+          terraform -chdir=terraform/sites/site-a init -backend=false
+          terraform -chdir=terraform/sites/site-a validate
 
       - name: Terraform init+validate site-b
         run: |
-          terraform -chdir=MQHA_EKS/terraform/sites/site-b init -backend=false
-          terraform -chdir=MQHA_EKS/terraform/sites/site-b validate
+          terraform -chdir=terraform/sites/site-b init -backend=false
+          terraform -chdir=terraform/sites/site-b validate
 
       - name: Terraform init+validate global-dns
         run: |
-          terraform -chdir=MQHA_EKS/terraform/global-dns init -backend=false
-          terraform -chdir=MQHA_EKS/terraform/global-dns validate
+          terraform -chdir=terraform/global-dns init -backend=false
+          terraform -chdir=terraform/global-dns validate
 
       - name: Validate Kubernetes YAML syntax
         run: |
           python -m pip install --upgrade pip
           pip install yamllint
-          yamllint MQHA_EKS/k8s
+          yamllint k8s
 
       - name: Shell script lint
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck MQHA_EKS/scripts/*.sh
+          shellcheck scripts/*.sh
 
   cd_deploy_site_a:
     if: github.event_name == 'workflow_dispatch' && (inputs.deploy_target == 'site-a' || inputs.deploy_target == 'both')
@@ -105,18 +103,18 @@ jobs:
 
       - name: Deploy Terraform for selected site
         run: |
-          terraform -chdir=MQHA_EKS/terraform/sites/${SITE} init
-          terraform -chdir=MQHA_EKS/terraform/sites/${SITE} apply -auto-approve
+          terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} apply -auto-approve
 
       - name: Update kubeconfig
         run: |
-          CLUSTER_NAME=$(terraform -chdir=MQHA_EKS/terraform/sites/${SITE} output -raw cluster_name)
+          CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
 
       - name: Deploy MQ manifests for selected site
         run: |
-          chmod +x MQHA_EKS/scripts/deploy-site-mq-ha.sh
-          MQHA_EKS/scripts/deploy-site-mq-ha.sh ${SITE}
+          chmod +x scripts/deploy-site-mq-ha.sh
+          scripts/deploy-site-mq-ha.sh ${SITE}
 
       - name: Post-deploy status
         run: |
@@ -151,18 +149,18 @@ jobs:
 
       - name: Deploy Terraform for selected site
         run: |
-          terraform -chdir=MQHA_EKS/terraform/sites/${SITE} init
-          terraform -chdir=MQHA_EKS/terraform/sites/${SITE} apply -auto-approve
+          terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} apply -auto-approve
 
       - name: Update kubeconfig
         run: |
-          CLUSTER_NAME=$(terraform -chdir=MQHA_EKS/terraform/sites/${SITE} output -raw cluster_name)
+          CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
 
       - name: Deploy MQ manifests for selected site
         run: |
-          chmod +x MQHA_EKS/scripts/deploy-site-mq-ha.sh
-          MQHA_EKS/scripts/deploy-site-mq-ha.sh ${SITE}
+          chmod +x scripts/deploy-site-mq-ha.sh
+          scripts/deploy-site-mq-ha.sh ${SITE}
 
       - name: Post-deploy status
         run: |
