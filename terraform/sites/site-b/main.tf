@@ -41,7 +41,7 @@ module "eks" {
 
   eks_managed_node_groups = {
     mq_nodes = {
-      name = "${var.cluster_name}-node-group"
+      name = "${var.cluster_name}-ng"
 
       instance_types = [var.node_instance_type]
       capacity_type  = var.enable_spot_instances ? "SPOT" : "ON_DEMAND"
