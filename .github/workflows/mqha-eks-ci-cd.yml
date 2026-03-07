@@ -84,9 +84,20 @@ jobs:
     strategy:
       matrix:
         site: [site-a, site-b]
+        include:
+          - site: site-a
+            region: us-east-1
+          - site: site-b
+            region: us-west-2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ matrix.region }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
