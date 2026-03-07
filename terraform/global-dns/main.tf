@@ -11,11 +11,11 @@ resource "aws_route53_health_check" "primary_tcp" {
 }
 
 resource "aws_route53_record" "mq_primary" {
-  zone_id = var.hosted_zone_id
-  name    = var.record_name
-  type    = "CNAME"
-  ttl     = 30
-  records = [var.primary_nlb_dns_name]
+  zone_id        = var.hosted_zone_id
+  name           = var.record_name
+  type           = "CNAME"
+  ttl            = 30
+  records        = [var.primary_nlb_dns_name]
   set_identifier = "mq-site-a-primary"
 
   failover_routing_policy {
@@ -26,11 +26,11 @@ resource "aws_route53_record" "mq_primary" {
 }
 
 resource "aws_route53_record" "mq_secondary" {
-  zone_id = var.hosted_zone_id
-  name    = var.record_name
-  type    = "CNAME"
-  ttl     = 30
-  records = [var.secondary_nlb_dns_name]
+  zone_id        = var.hosted_zone_id
+  name           = var.record_name
+  type           = "CNAME"
+  ttl            = 30
+  records        = [var.secondary_nlb_dns_name]
   set_identifier = "mq-site-b-secondary"
 
   failover_routing_policy {
