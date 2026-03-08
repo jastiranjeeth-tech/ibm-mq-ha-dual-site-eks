@@ -32,7 +32,7 @@ module "eks" {
   version = "~> 20.0"
 
   cluster_name    = var.cluster_name
-  cluster_version = "1.28"
+  cluster_version = "1.30"
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
@@ -42,6 +42,8 @@ module "eks" {
   eks_managed_node_groups = {
     mq_nodes = {
       name = "${var.cluster_name}-ng"
+
+      ami_type = "AL2023_x86_64_STANDARD"
 
       iam_role_use_name_prefix = false
       iam_role_name            = "${var.cluster_name}-node-role"
