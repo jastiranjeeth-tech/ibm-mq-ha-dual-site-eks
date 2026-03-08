@@ -115,6 +115,16 @@ aws iam put-role-policy \
 5. Value: `arn:aws:iam::YOUR_AWS_ACCOUNT_ID:role/GitHubActionsEKSRole`
 6. Click **Add secret**
 
+## Step 4.1: Add Terraform Backend Variables in GitHub
+
+Go to **Settings** → **Secrets and variables** → **Actions** → **Variables** and add:
+
+1. `TF_STATE_BUCKET` = your S3 bucket for Terraform state (example: `mqha-terraform-state-831488932214`)
+2. `TF_STATE_REGION` = region of the state bucket (example: `us-east-1`)
+3. `TF_LOCK_TABLE` = DynamoDB table for Terraform state locking (example: `mqha-terraform-locks`)
+
+These are required so GitHub Actions uses shared remote state and does not recreate already-existing AWS resources.
+
 ## Step 5: Create GitHub Environments for Approvals
 
 1. Go to **Settings** → **Environments**

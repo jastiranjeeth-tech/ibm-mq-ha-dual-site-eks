@@ -7,6 +7,7 @@ set -euo pipefail
 
 SITE=${1:-site-a}
 REGION=${2:-us-east-1}
+TF_STATE_KEY_PREFIX=${TF_STATE_KEY_PREFIX:-mqha-eks}
 
 if [ "$SITE" != "site-a" ] && [ "$SITE" != "site-b" ]; then
   echo "❌ Invalid site. Use 'site-a' or 'site-b'"
@@ -21,7 +22,18 @@ echo ""
 
 # Initialize Terraform
 echo "Initializing Terraform..."
-terraform -chdir=terraform/sites/${SITE} init
+if [ -n "${TF_STATE_BUCKET:-}" ] && [ -n "${TF_STATE_REGION:-}" ] && [ -n "${TF_LOCK_TABLE:-}" ]; then
+  echo "Using remote backend: s3://${TF_STATE_BUCKET}/${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate"
+  terraform -chdir=terraform/sites/${SITE} init \
+    -backend-config="bucket=${TF_STATE_BUCKET}" \
+    -backend-config="key=${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate" \
+    -backend-config="region=${TF_STATE_REGION}" \
+    -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+    -backend-config="encrypt=true"
+else
+  echo "Using local backend (set TF_STATE_BUCKET, TF_STATE_REGION, TF_LOCK_TABLE to use remote backend)"
+  terraform -chdir=terraform/sites/${SITE} init
+fi
 
 # Get cluster name
 CLUSTER_NAME="mq-ha-${SITE}"

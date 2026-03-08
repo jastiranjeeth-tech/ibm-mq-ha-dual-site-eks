@@ -35,6 +35,12 @@ permissions:
   id-token: write
   contents: read
 
+env:
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
+  TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE }}
+  TF_STATE_KEY_PREFIX: mqha-eks
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -106,7 +112,12 @@ jobs:
 
       - name: Terraform Plan for ${{ matrix.site }}
         run: |
-          terraform -chdir=terraform/sites/${{ matrix.site }} init -backend=false
+          terraform -chdir=terraform/sites/${{ matrix.site }} init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY_PREFIX}/${{ matrix.site }}/terraform.tfstate" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+            -backend-config="encrypt=true"
           terraform -chdir=terraform/sites/${{ matrix.site }} plan
 
   cd_deploy_site_a:
@@ -137,7 +148,12 @@ jobs:
 
       - name: Terraform Plan for site-a
         run: |
-          terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+            -backend-config="encrypt=true"
           terraform -chdir=terraform/sites/${SITE} plan
 
       - name: Deploy Terraform for site-a
@@ -187,7 +203,12 @@ jobs:
 
       - name: Terraform Plan for site-b
         run: |
-          terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+            -backend-config="encrypt=true"
           terraform -chdir=terraform/sites/${SITE} plan
 
       - name: Deploy Terraform for site-b
@@ -244,10 +265,49 @@ jobs:
           kubectl delete -f k8s/${SITE}/ --ignore-not-found=true || true
           kubectl delete namespace ibm-mq --ignore-not-found=true || true
 
+      - name: Show resources to be destroyed
+        run: |
+          echo "=== Resources that will be DESTROYED for ${SITE} ==="
+          terraform -chdir=terraform/sites/${SITE} plan -destroy
+
       - name: Terraform Destroy for site-a
         run: |
-          terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+            -backend-config="encrypt=true"
           terraform -chdir=terraform/sites/${SITE} destroy -auto-approve
+
+      - name: Verify destruction - check state file
+        run: |
+          echo "=== Verifying ${SITE} destruction ==="
+          RESOURCE_COUNT=$(terraform -chdir=terraform/sites/${SITE} state list 2>/dev/null | wc -l)
+          echo "Remaining resources in state: $RESOURCE_COUNT"
+          if [ $RESOURCE_COUNT -gt 0 ]; then
+            echo "WARNING: Found remaining resources, running destroy again..."
+            terraform -chdir=terraform/sites/${SITE} destroy -auto-approve
+            terraform -chdir=terraform/sites/${SITE} state list
+          else
+            echo "✅ State file is clean - all resources destroyed"
+          fi
+
+      - name: Verify AWS resources deleted
+        run: |
+          echo "=== Checking AWS for remaining resources ==="
+          EKS_CLUSTERS=$(aws eks list-clusters --region $AWS_REGION --query 'clusters[?contains(@, `mq-ha`)]' --output text)
+          if [ -z "$EKS_CLUSTERS" ]; then
+            echo "✅ No EKS clusters found"
+          else
+            echo "⚠️  Remaining EKS clusters: $EKS_CLUSTERS"
+          fi
+          
+          VPC_COUNT=$(aws ec2 describe-vpcs --region $AWS_REGION --query 'Vpcs[?Tags[?Key==`Name`].Value|contains(@, `mq-ha`)].VpcId' --output text | wc -w)
+          echo "VPCs with 'mq-ha' tag: $VPC_COUNT"
+          
+          NAT_GATEWAYS=$(aws ec2 describe-nat-gateways --region $AWS_REGION --query 'NatGateways[?State==`available`].[NatGatewayId]' --output text | wc -w)
+          echo "Active NAT Gateways: $NAT_GATEWAYS"
 
   cd_destroy_site_b:
     if: github.event_name == 'workflow_dispatch' && (inputs.action == 'destroy-site-b' || inputs.action == 'destroy-both')
@@ -284,7 +344,46 @@ jobs:
           kubectl delete -f k8s/${SITE}/ --ignore-not-found=true || true
           kubectl delete namespace ibm-mq --ignore-not-found=true || true
 
+      - name: Show resources to be destroyed
+        run: |
+          echo "=== Resources that will be DESTROYED for ${SITE} ==="
+          terraform -chdir=terraform/sites/${SITE} plan -destroy
+
       - name: Terraform Destroy for site-b
         run: |
-          terraform -chdir=terraform/sites/${SITE} init
+          terraform -chdir=terraform/sites/${SITE} init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+            -backend-config="encrypt=true"
           terraform -chdir=terraform/sites/${SITE} destroy -auto-approve
+
+      - name: Verify destruction - check state file
+        run: |
+          echo "=== Verifying ${SITE} destruction ==="
+          RESOURCE_COUNT=$(terraform -chdir=terraform/sites/${SITE} state list 2>/dev/null | wc -l)
+          echo "Remaining resources in state: $RESOURCE_COUNT"
+          if [ $RESOURCE_COUNT -gt 0 ]; then
+            echo "WARNING: Found remaining resources, running destroy again..."
+            terraform -chdir=terraform/sites/${SITE} destroy -auto-approve
+            terraform -chdir=terraform/sites/${SITE} state list
+          else
+            echo "✅ State file is clean - all resources destroyed"
+          fi
+
+      - name: Verify AWS resources deleted
+        run: |
+          echo "=== Checking AWS for remaining resources ==="
+          EKS_CLUSTERS=$(aws eks list-clusters --region $AWS_REGION --query 'clusters[?contains(@, `mq-ha`)]' --output text)
+          if [ -z "$EKS_CLUSTERS" ]; then
+            echo "✅ No EKS clusters found"
+          else
+            echo "⚠️  Remaining EKS clusters: $EKS_CLUSTERS"
+          fi
+          
+          VPC_COUNT=$(aws ec2 describe-vpcs --region $AWS_REGION --query 'Vpcs[?Tags[?Key==`Name`].Value|contains(@, `mq-ha`)].VpcId' --output text | wc -w)
+          echo "VPCs with 'mq-ha' tag: $VPC_COUNT"
+          
+          NAT_GATEWAYS=$(aws ec2 describe-nat-gateways --region $AWS_REGION --query 'NatGateways[?State==`available`].[NatGatewayId]' --output text | wc -w)
+          echo "Active NAT Gateways: $NAT_GATEWAYS"
