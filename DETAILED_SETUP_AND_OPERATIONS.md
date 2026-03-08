@@ -101,6 +101,10 @@ Terraform creates:
 - IAM role for service account (IRSA) for EBS CSI driver
 - EKS addon `aws-ebs-csi-driver`
 
+Current pinned addon version in this project:
+
+- `v1.53.0-eksbuild.1`
+
 Why: StatefulSet PVCs need dynamic EBS volume provisioning.
 
 ### Step E: Plan and Apply lifecycle
@@ -229,7 +233,9 @@ Workflow action options:
 4. Terraform plan
 5. Manual approval gate
 6. Terraform apply
-7. `kubectl apply` for MQ manifests
+7. Grant EKS API access to the currently assumed GitHub Actions role (EKS Access Entry + cluster-admin policy)
+8. Update kubeconfig and verify cluster connectivity
+9. `kubectl apply` for MQ manifests
 
 ---
 
@@ -287,6 +293,56 @@ Fix:
 
 - Ensure `TF_STATE_BUCKET`, `TF_STATE_REGION`, `TF_LOCK_TABLE` exist
 - Ensure role has S3 bucket/object permissions
+
+### EKS addon version not supported
+
+Example error:
+
+- `InvalidParameterException: Addon version specified is not supported`
+
+Cause: hardcoded addon version is not valid for the cluster Kubernetes version/region.
+
+Fix:
+
+- Use a currently supported version (project default is `v1.53.0-eksbuild.1`)
+- Re-run plan/apply
+
+### kubectl asks for credentials in pipeline
+
+Example error:
+
+- `the server has asked for the client to provide credentials`
+- `You must be logged in to the server`
+
+Cause: kubeconfig context exists, but the GitHub OIDC role is not authorized at EKS API level.
+
+Fix in this repo:
+
+- Deploy jobs now create/associate EKS Access Entry for the current assumed role before running `kubectl`
+- Jobs also run connectivity checks (`kubectl config current-context`, `kubectl cluster-info`) immediately after kubeconfig update
+
+### Failed to save Terraform state to S3 backend
+
+Example error:
+
+- `failed to rewind transport stream for retry, request stream is not seekable`
+- `state written to errored.tfstate`
+
+Cause: transient S3 upload/retry issue during backend state persistence.
+
+Fix in this repo:
+
+- Pipeline sets AWS SDK retry tuning (`AWS_RETRY_MODE=adaptive`, `AWS_MAX_ATTEMPTS=10`)
+- If apply fails and `errored.tfstate` exists, workflow automatically runs:
+
+```bash
+terraform state push errored.tfstate
+terraform apply -auto-approve
+```
+
+Operational note:
+
+- Always run the latest workflow triggered by newest commit. Re-running an old failed run uses old code.
 
 ---
 
