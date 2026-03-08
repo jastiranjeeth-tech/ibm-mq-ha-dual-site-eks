@@ -280,12 +280,7 @@ jobs:
           kubectl delete -f k8s/${SITE}/ --ignore-not-found=true || true
           kubectl delete namespace ibm-mq --ignore-not-found=true || true
 
-      - name: Show resources to be destroyed
-        run: |
-          echo "=== Resources that will be DESTROYED for ${SITE} ==="
-          terraform -chdir=terraform/sites/${SITE} plan -destroy
-
-      - name: Terraform Destroy for site-a
+      - name: Terraform Init
         run: |
           : "${TF_STATE_BUCKET:?Missing repository variable TF_STATE_BUCKET}"
           : "${TF_STATE_REGION:?Missing repository variable TF_STATE_REGION}"
@@ -296,6 +291,14 @@ jobs:
             -backend-config="region=${TF_STATE_REGION}" \
             -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
             -backend-config="encrypt=true"
+
+      - name: Show resources to be destroyed
+        run: |
+          echo "=== Resources that will be DESTROYED for ${SITE} ==="
+          terraform -chdir=terraform/sites/${SITE} plan -destroy
+
+      - name: Terraform Destroy for site-a
+        run: |
           terraform -chdir=terraform/sites/${SITE} destroy -auto-approve
 
       - name: Verify destruction - check state file
@@ -369,9 +372,12 @@ jobs:
 
       - name: Terraform Destroy for site-b
         run: |
-          : "${TF_STATE_BUCKET:?Missing repository variable TF_STATE_BUCKET}"
-          : "${TF_STATE_REGION:?Missing repository variable TF_STATE_REGION}"
-          : "${TF_LOCK_TABLE:?Missing repository variable TF_LOCK_TABLE}"
+            -backend-config="key=${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+            -backend-config="encrypt=true"
+
+      - name: {TF_LOCK_TABLE:?Missing repository variable TF_LOCK_TABLE}"
           terraform -chdir=terraform/sites/${SITE} init \
             -backend-config="bucket=${TF_STATE_BUCKET}" \
             -backend-config="key=${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate" \
