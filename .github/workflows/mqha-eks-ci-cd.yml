@@ -40,6 +40,8 @@ env:
   TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
   TF_LOCK_TABLE: ${{ vars.TF_LOCK_TABLE }}
   TF_STATE_KEY_PREFIX: mqha-eks
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: 10
 
 jobs:
   ci:
@@ -169,7 +171,18 @@ jobs:
 
       - name: Deploy Terraform for site-a
         run: |
-          terraform -chdir=terraform/sites/${SITE} apply -auto-approve
+          if ! terraform -chdir=terraform/sites/${SITE} apply -auto-approve; then
+            echo "Terraform apply failed. Checking for errored.tfstate recovery file..."
+            if [ -f "terraform/sites/${SITE}/errored.tfstate" ]; then
+              echo "Found errored.tfstate. Pushing recovered state to backend..."
+              terraform -chdir=terraform/sites/${SITE} state push errored.tfstate
+              echo "State push succeeded. Re-running apply..."
+              terraform -chdir=terraform/sites/${SITE} apply -auto-approve
+            else
+              echo "No errored.tfstate found. Failing step."
+              exit 1
+            fi
+          fi
 
       - name: Grant CI role EKS access for site-a
         run: |
@@ -257,7 +270,18 @@ jobs:
 
       - name: Deploy Terraform for site-b
         run: |
-          terraform -chdir=terraform/sites/${SITE} apply -auto-approve
+          if ! terraform -chdir=terraform/sites/${SITE} apply -auto-approve; then
+            echo "Terraform apply failed. Checking for errored.tfstate recovery file..."
+            if [ -f "terraform/sites/${SITE}/errored.tfstate" ]; then
+              echo "Found errored.tfstate. Pushing recovered state to backend..."
+              terraform -chdir=terraform/sites/${SITE} state push errored.tfstate
+              echo "State push succeeded. Re-running apply..."
+              terraform -chdir=terraform/sites/${SITE} apply -auto-approve
+            else
+              echo "No errored.tfstate found. Failing step."
+              exit 1
+            fi
+          fi
 
       - name: Grant CI role EKS access for site-b
         run: |
