@@ -1,174 +1,136 @@
 # IBM MQ Dual-Site DR on AWS EKS
 
-Two-site IBM MQ design on EKS:
+This repository deploys IBM MQ in a dual-site EKS design:
 
-- **Site A (Primary):** 3-pod MQ Native HA
-- **Site B (Standby):** 3-pod MQ Native HA
-- **Client endpoint:** Route53 failover DNS
+- Site A (primary): 3-pod MQ Native HA
+- Site B (standby): 3-pod MQ Native HA
+- Route53 failover DNS for client endpoint switch
 
-> Note: MQ Native HA is intra-cluster. Cross-site failover is implemented at DNS/client-routing level.
+> MQ Native HA provides high availability within a site/cluster. Cross-site failover in this project is handled at DNS/client routing level.
 
 ## Architecture
 
-```
-                      Clients (MQ Explorer / Apps)
-                                |
-                       mq.example.com (Route53)
-                                |
-              +-----------------+-----------------+
-              |                                   |
-        PRIMARY (healthy)                   SECONDARY (used on failover)
-              |                                   |
-      Site A NLB:1414/9443                 Site B NLB:1414/9443
-              |                                   |
-      EKS Cluster Site A                    EKS Cluster Site B
-      mq-ha (3 pods NHA)                    mq-ha (3 pods NHA)
-```
-
-## Project Structure
-
-```
-MQHA_EKS/
-├── README.md
-├── LEARNING_GUIDE.md
-├── terraform/
-│   ├── global-dns/
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   ├── outputs.tf
-│   │   └── versions.tf
-│   └── sites/
-│       ├── site-a/
-│       │   ├── main.tf
-│       │   ├── variables.tf
-│       │   ├── outputs.tf
-│       │   ├── versions.tf
-│       │   └── terraform.tfvars
-│       └── site-b/
-│           ├── main.tf
-│           ├── variables.tf
-│           ├── outputs.tf
-│           ├── versions.tf
-│           └── terraform.tfvars
-├── k8s/
-│   ├── site-a/
-│   │   ├── namespace.yaml
-│   │   ├── storage-class.yaml
-│   │   ├── mq-configmap.yaml
-│   │   ├── mq-secret.yaml
-│   │   └── mq-statefulset.yaml
-│   └── site-b/
-│       ├── namespace.yaml
-│       ├── storage-class.yaml
-│       ├── mq-configmap.yaml
-│       ├── mq-secret.yaml
-│       └── mq-statefulset.yaml
-└── scripts/
-    ├── deploy-site-mq-ha.sh
-    ├── deploy-dual-site.sh
-    ├── get-site-endpoints.sh
-    ├── check-dual-site-health.sh
-    └── create-route53-failover-records.sh
+```text
+Clients (MQ Explorer / Apps)
+                        |
+       mq.example.com (Route53 failover)
+                        |
++-------+--------------------------+
+|                                  |
+PRIMARY (healthy)            SECONDARY (failover)
+|                                  |
+Site A NLB:1414/9443         Site B NLB:1414/9443
+|                                  |
+EKS site-a + MQ NHA(3)       EKS site-b + MQ NHA(3)
 ```
 
-## Quick Start
+## Prerequisites
 
-### 1) Deploy EKS Site A
+- AWS account with permissions for EKS, EC2, IAM, KMS, Route53, S3, DynamoDB, CloudWatch
+- Terraform >= 1.6
+- AWS CLI v2
+- kubectl
+- GitHub repository with Actions enabled
+
+## One-Time Setup (Required)
+
+### 1) Configure AWS OIDC role for GitHub Actions
+
+Use the script and guide:
+
+- [setup-aws-github-oidc.sh](setup-aws-github-oidc.sh)
+- [AWS_GITHUB_SETUP.md](AWS_GITHUB_SETUP.md)
+
+Add repository secret:
+
+- `AWS_ROLE_TO_ASSUME` = IAM role ARN used by GitHub Actions
+
+### 2) Create Terraform remote backend (S3 + DynamoDB)
+
+```bash
+./scripts/setup-terraform-backend.sh mqha-eks-tfstate-831488932214 mqha-eks-tflock us-east-1
+```
+
+Add GitHub repository variables:
+
+- `TF_STATE_BUCKET` = `mqha-eks-tfstate-831488932214`
+- `TF_STATE_REGION` = `us-east-1`
+- `TF_LOCK_TABLE` = `mqha-eks-tflock`
+
+### 3) Create GitHub Environments (manual approvals)
+
+- `site-a-approval`
+- `site-b-approval`
+- `site-a-destroy-approval`
+- `site-b-destroy-approval`
+
+Set required reviewers on each environment.
+
+## CI/CD Workflow
+
+Workflow file: [​.github/workflows/mqha-eks-ci-cd.yml](.github/workflows/mqha-eks-ci-cd.yml)
+
+### CI (push / PR)
+
+- Terraform fmt + validate
+- YAML lint
+- shellcheck
+- terraform plan matrix (site-a, site-b)
+
+### Manual actions (workflow_dispatch)
+
+Action options:
+
+- `deploy-site-a`
+- `deploy-site-b`
+- `deploy-both`
+- `destroy-site-a`
+- `destroy-site-b`
+- `destroy-both`
+
+## Local Deployment (Optional)
+
+### Deploy site-a
 
 ```bash
 cd terraform/sites/site-a
-terraform init
+terraform init \
+      -backend-config="bucket=mqha-eks-tfstate-831488932214" \
+      -backend-config="key=mqha-eks/site-a/terraform.tfstate" \
+      -backend-config="region=us-east-1" \
+      -backend-config="dynamodb_table=mqha-eks-tflock" \
+      -backend-config="encrypt=true"
 terraform apply -auto-approve
 ```
 
-### 2) Deploy EKS Site B
+### Deploy site-b
 
 ```bash
 cd ../site-b
-terraform init
+terraform init \
+      -backend-config="bucket=mqha-eks-tfstate-831488932214" \
+      -backend-config="key=mqha-eks/site-b/terraform.tfstate" \
+      -backend-config="region=us-east-1" \
+      -backend-config="dynamodb_table=mqha-eks-tflock" \
+      -backend-config="encrypt=true"
 terraform apply -auto-approve
 ```
 
-### 3) Configure kube contexts
-
-```bash
-aws eks update-kubeconfig --name mq-ha-site-a --region us-east-1
-aws eks update-kubeconfig --name mq-ha-site-b --region us-west-2
-kubectl config get-contexts
-```
-
-### 4) Deploy MQ to both sites
+### Deploy MQ manifests
 
 ```bash
 cd ../../../scripts
-./deploy-dual-site.sh <site-a-context> <site-b-context>
+./deploy-site-mq-ha.sh site-a
+./deploy-site-mq-ha.sh site-b
 ```
 
-### 5) Get NLB endpoints
+## Troubleshooting Aids
 
-```bash
-./get-site-endpoints.sh <site-a-context> <site-b-context>
-```
+- Resource import: [import-aws-resources.sh](import-aws-resources.sh)
+- Import guide: [RESOURCE_IMPORT_GUIDE.md](RESOURCE_IMPORT_GUIDE.md)
+- Pre-destroy verification: [CHECK_RESOURCES_BEFORE_DESTROY.md](CHECK_RESOURCES_BEFORE_DESTROY.md)
+- Cleanup helper: [cleanup-aws-resources.sh](cleanup-aws-resources.sh)
 
-### 6) Create Route53 failover record
+## Detailed Step-by-Step Operations Guide
 
-```bash
-./create-route53-failover-records.sh <hosted-zone-id> <record-name> <site-a-nlb-dns> <site-b-nlb-dns>
-```
-
-### 7) Connect from MQ Explorer
-
-- Host: your Route53 record (example `mq.example.com`)
-- Port: `1414`
-- Channel: `DEV.APP.SVRCONN`
-- Queue manager:
-  - Site A uses `QMHA_A`
-  - Site B uses `QMHA_B`
-
-## What is Implemented
-
-- Two independent EKS clusters (one per site)
-- Two independent 3-pod MQ Native HA StatefulSets
-- External NLB per site
-- Route53 failover records for site failover
-
-## Important DR Note
-
-This setup gives **endpoint failover** between sites. Message/data replication across sites is not automatic from Native HA itself.
-
-For strict cross-site RPO/RTO, add an MQ DR replication pattern at application or MQ topology level.
-
-## Security Note
-
-Current manifests are learning-focused:
-
-- default passwords
-- channel auth disabled
-- wide CIDR opens in tfvars
-
-Harden these before production use.
-
-## CI/CD
-
-GitHub Actions workflow is added at [.github/workflows/mqha-eks-ci-cd.yml](.github/workflows/mqha-eks-ci-cd.yml).
-
-### CI checks on push/PR
-
-- Terraform `fmt` + `validate`
-- Kubernetes YAML lint
-- Shell script lint
-
-### Manual CD (workflow_dispatch)
-
-You can manually deploy `site-a`, `site-b`, or `both` from Actions.
-
-The workflow has separate deploy jobs:
-
-- `cd_deploy_site_a` (environment: `site-a-approval`)
-- `cd_deploy_site_b` (environment: `site-b-approval`)
-
-Set required reviewers in GitHub Environments for approval gates.
-
-Required GitHub secret:
-
-- `AWS_ROLE_TO_ASSUME` (IAM role for OIDC federation from GitHub Actions)
+See [DETAILED_SETUP_AND_OPERATIONS.md](DETAILED_SETUP_AND_OPERATIONS.md) for complete end-to-end setup, deploy, validation, failover testing, destroy, and recovery commands.

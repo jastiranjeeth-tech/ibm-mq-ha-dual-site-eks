@@ -40,10 +40,51 @@ CLUSTER_NAME="mq-ha-${SITE}"
 echo ""
 echo "Looking for cluster: $CLUSTER_NAME"
 
-# Check if cluster exists
-if ! aws eks describe-cluster --name $CLUSTER_NAME --region $REGION 2>/dev/null; then
-  echo "❌ Cluster $CLUSTER_NAME not found in $REGION"
-  exit 1
+# Import common resources that might survive partial destroy
+echo "STEP 0: Importing common pre-existing resources (if any)"
+echo "=========================================="
+
+KMS_ALIAS="alias/eks/${CLUSTER_NAME}"
+LOG_GROUP="/aws/eks/${CLUSTER_NAME}/cluster"
+NODE_ROLE_NAME="${CLUSTER_NAME}-node-role"
+
+if aws kms describe-key --key-id "$KMS_ALIAS" --region "$REGION" >/dev/null 2>&1; then
+  echo "Importing KMS alias: $KMS_ALIAS"
+  terraform -chdir=terraform/sites/${SITE} import \
+    'module.eks.module.kms.aws_kms_alias.this["cluster"]' \
+    "$KMS_ALIAS" || echo "⚠️  KMS alias may already be in state"
+else
+  echo "KMS alias not found: $KMS_ALIAS"
+fi
+
+if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --region "$REGION" --query 'logGroups[?logGroupName==`'"$LOG_GROUP"'`].logGroupName' --output text | grep -q "$LOG_GROUP"; then
+  echo "Importing CloudWatch log group: $LOG_GROUP"
+  terraform -chdir=terraform/sites/${SITE} import \
+    'module.eks.aws_cloudwatch_log_group.this[0]' \
+    "$LOG_GROUP" || echo "⚠️  Log group may already be in state"
+else
+  echo "Log group not found: $LOG_GROUP"
+fi
+
+if aws iam get-role --role-name "$NODE_ROLE_NAME" >/dev/null 2>&1; then
+  echo "Importing node IAM role: $NODE_ROLE_NAME"
+  terraform -chdir=terraform/sites/${SITE} import \
+    'module.eks.module.eks_managed_node_group["mq_nodes"].aws_iam_role.this[0]' \
+    "$NODE_ROLE_NAME" || echo "⚠️  Node role may already be in state"
+else
+  echo "Node IAM role not found: $NODE_ROLE_NAME"
+fi
+
+echo ""
+
+# Check if cluster exists for deep import
+if ! aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" >/dev/null 2>&1; then
+  echo "⚠️  Cluster $CLUSTER_NAME not found in $REGION"
+  echo "✅ Completed common resource import only."
+  echo ""
+  echo "Current state resources:"
+  terraform -chdir=terraform/sites/${SITE} state list || true
+  exit 0
 fi
 
 echo "✅ Found cluster $CLUSTER_NAME"
@@ -131,7 +172,6 @@ echo ""
 
 # Import Node IAM Role
 echo "STEP 7: Importing Node IAM Role..."
-NODE_ROLE_NAME="${CLUSTER_NAME}-node-role"
 terraform -chdir=terraform/sites/${SITE} import \
   'module.eks.module.eks_managed_node_group["mq_nodes"].aws_iam_role.this[0]' \
   $NODE_ROLE_NAME || echo "⚠️  Node Role may already be in state"
