@@ -150,6 +150,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.6.6'
+          terraform_wrapper: false
 
       - name: Terraform Plan for site-a
         run: |
@@ -174,6 +175,8 @@ jobs:
         run: |
           CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          kubectl config current-context
+          kubectl cluster-info
 
       - name: Deploy MQ manifests for site-a
         run: |
@@ -210,6 +213,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.6.6'
+          terraform_wrapper: false
 
       - name: Terraform Plan for site-b
         run: |
@@ -234,6 +238,8 @@ jobs:
         run: |
           CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          kubectl config current-context
+          kubectl cluster-info
 
       - name: Deploy MQ manifests for site-b
         run: |
