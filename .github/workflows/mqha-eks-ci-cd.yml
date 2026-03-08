@@ -17,6 +17,12 @@ on:
           - deploy-site-a
           - deploy-site-b
           - deploy-both
+          - deploy-terraform-site-a
+          - deploy-terraform-site-b
+          - deploy-terraform-both
+          - deploy-k8s-site-a
+          - deploy-k8s-site-b
+          - deploy-k8s-both
           - destroy-site-a
           - destroy-site-b
           - destroy-both
@@ -128,7 +134,7 @@ jobs:
           terraform -chdir=terraform/sites/${{ matrix.site }} plan
 
   cd_deploy_site_a_terraform:
-    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'deploy-site-a' || inputs.action == 'deploy-both')
+    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'deploy-site-a' || inputs.action == 'deploy-both' || inputs.action == 'deploy-terraform-site-a' || inputs.action == 'deploy-terraform-both')
     needs: ci
     runs-on: ubuntu-latest
     environment: site-a-approval
@@ -300,8 +306,127 @@ jobs:
           kubectl get pods -n ibm-mq
           kubectl get svc -n ibm-mq mq-ha-service
 
+  cd_deploy_site_a_k8s_only:
+    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'deploy-k8s-site-a' || inputs.action == 'deploy-k8s-both')
+    needs: ci
+    runs-on: ubuntu-latest
+    env:
+      SITE: site-a
+      AWS_REGION: ${{ inputs.site_a_region }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.6'
+          terraform_wrapper: false
+
+      - name: Terraform Init for outputs
+        run: |
+          : "${TF_STATE_BUCKET:?Missing repository variable TF_STATE_BUCKET}"
+          : "${TF_STATE_REGION:?Missing repository variable TF_STATE_REGION}"
+          : "${TF_LOCK_TABLE:?Missing repository variable TF_LOCK_TABLE}"
+          terraform -chdir=terraform/sites/${SITE} init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+            -backend-config="encrypt=true"
+
+      - name: Grant CI role EKS access for site-a
+        run: |
+          CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
+          CALLER_ARN=$(aws sts get-caller-identity --query Arn --output text)
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+          if [[ "$CALLER_ARN" == arn:aws:sts::*:assumed-role/* ]]; then
+            ROLE_NAME=$(echo "$CALLER_ARN" | cut -d'/' -f2)
+            PRINCIPAL_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
+          else
+            PRINCIPAL_ARN="$CALLER_ARN"
+          fi
+
+          echo "Granting EKS access to principal: ${PRINCIPAL_ARN}"
+          aws eks create-access-entry \
+            --cluster-name "$CLUSTER_NAME" \
+            --principal-arn "$PRINCIPAL_ARN" \
+            --type STANDARD || true
+
+          aws eks associate-access-policy \
+            --cluster-name "$CLUSTER_NAME" \
+            --principal-arn "$PRINCIPAL_ARN" \
+            --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+            --access-scope type=cluster || true
+
+          echo "Waiting for EKS access policy association to be visible..."
+          for i in {1..12}; do
+            POLICY_COUNT=$(aws eks list-associated-access-policies \
+              --cluster-name "$CLUSTER_NAME" \
+              --principal-arn "$PRINCIPAL_ARN" \
+              --query "length(associatedAccessPolicies[?policyArn=='arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy'])" \
+              --output text 2>/dev/null || echo 0)
+
+            if [ "$POLICY_COUNT" = "1" ]; then
+              echo "EKS access policy association confirmed."
+              break
+            fi
+
+            echo "Policy not visible yet, retrying... ($i/12)"
+            sleep 10
+          done
+
+          if [ "$POLICY_COUNT" != "1" ]; then
+            echo "ERROR: EKS access policy association not found for ${PRINCIPAL_ARN}"
+            exit 1
+          fi
+
+      - name: Update kubeconfig
+        run: |
+          CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          kubectl config current-context
+
+          echo "Waiting for Kubernetes RBAC authorization..."
+          AUTH_OK="no"
+          for i in {1..18}; do
+            AUTH_OK=$(kubectl auth can-i create namespaces 2>/dev/null || echo no)
+            if [ "$AUTH_OK" = "yes" ]; then
+              echo "Kubernetes authorization confirmed."
+              break
+            fi
+
+            echo "RBAC not ready yet, retrying... ($i/18)"
+            sleep 10
+          done
+
+          if [ "$AUTH_OK" != "yes" ]; then
+            echo "ERROR: kubectl still not authorized for cluster operations"
+            exit 1
+          fi
+
+      - name: Deploy MQ manifests for site-a
+        run: |
+          chmod +x scripts/deploy-site-mq-ha.sh
+          scripts/deploy-site-mq-ha.sh ${SITE}
+
+      - name: Post-deploy status
+        run: |
+          kubectl get pods -n ibm-mq
+          kubectl get svc -n ibm-mq mq-ha-service
+
   cd_deploy_site_b_terraform:
-    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'deploy-site-b' || inputs.action == 'deploy-both')
+    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'deploy-site-b' || inputs.action == 'deploy-both' || inputs.action == 'deploy-terraform-site-b' || inputs.action == 'deploy-terraform-both')
     needs: ci
     runs-on: ubuntu-latest
     environment: site-b-approval
@@ -357,6 +482,125 @@ jobs:
   cd_deploy_site_b_k8s:
     if: github.event_name == 'workflow_dispatch' && (inputs.action == 'deploy-site-b' || inputs.action == 'deploy-both')
     needs: cd_deploy_site_b_terraform
+    runs-on: ubuntu-latest
+    env:
+      SITE: site-b
+      AWS_REGION: ${{ inputs.site_b_region }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.6'
+          terraform_wrapper: false
+
+      - name: Terraform Init for outputs
+        run: |
+          : "${TF_STATE_BUCKET:?Missing repository variable TF_STATE_BUCKET}"
+          : "${TF_STATE_REGION:?Missing repository variable TF_STATE_REGION}"
+          : "${TF_LOCK_TABLE:?Missing repository variable TF_LOCK_TABLE}"
+          terraform -chdir=terraform/sites/${SITE} init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY_PREFIX}/${SITE}/terraform.tfstate" \
+            -backend-config="region=${TF_STATE_REGION}" \
+            -backend-config="dynamodb_table=${TF_LOCK_TABLE}" \
+            -backend-config="encrypt=true"
+
+      - name: Grant CI role EKS access for site-b
+        run: |
+          CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
+          CALLER_ARN=$(aws sts get-caller-identity --query Arn --output text)
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+          if [[ "$CALLER_ARN" == arn:aws:sts::*:assumed-role/* ]]; then
+            ROLE_NAME=$(echo "$CALLER_ARN" | cut -d'/' -f2)
+            PRINCIPAL_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
+          else
+            PRINCIPAL_ARN="$CALLER_ARN"
+          fi
+
+          echo "Granting EKS access to principal: ${PRINCIPAL_ARN}"
+          aws eks create-access-entry \
+            --cluster-name "$CLUSTER_NAME" \
+            --principal-arn "$PRINCIPAL_ARN" \
+            --type STANDARD || true
+
+          aws eks associate-access-policy \
+            --cluster-name "$CLUSTER_NAME" \
+            --principal-arn "$PRINCIPAL_ARN" \
+            --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+            --access-scope type=cluster || true
+
+          echo "Waiting for EKS access policy association to be visible..."
+          for i in {1..12}; do
+            POLICY_COUNT=$(aws eks list-associated-access-policies \
+              --cluster-name "$CLUSTER_NAME" \
+              --principal-arn "$PRINCIPAL_ARN" \
+              --query "length(associatedAccessPolicies[?policyArn=='arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy'])" \
+              --output text 2>/dev/null || echo 0)
+
+            if [ "$POLICY_COUNT" = "1" ]; then
+              echo "EKS access policy association confirmed."
+              break
+            fi
+
+            echo "Policy not visible yet, retrying... ($i/12)"
+            sleep 10
+          done
+
+          if [ "$POLICY_COUNT" != "1" ]; then
+            echo "ERROR: EKS access policy association not found for ${PRINCIPAL_ARN}"
+            exit 1
+          fi
+
+      - name: Update kubeconfig
+        run: |
+          CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          kubectl config current-context
+
+          echo "Waiting for Kubernetes RBAC authorization..."
+          AUTH_OK="no"
+          for i in {1..18}; do
+            AUTH_OK=$(kubectl auth can-i create namespaces 2>/dev/null || echo no)
+            if [ "$AUTH_OK" = "yes" ]; then
+              echo "Kubernetes authorization confirmed."
+              break
+            fi
+
+            echo "RBAC not ready yet, retrying... ($i/18)"
+            sleep 10
+          done
+
+          if [ "$AUTH_OK" != "yes" ]; then
+            echo "ERROR: kubectl still not authorized for cluster operations"
+            exit 1
+          fi
+
+      - name: Deploy MQ manifests for site-b
+        run: |
+          chmod +x scripts/deploy-site-mq-ha.sh
+          scripts/deploy-site-mq-ha.sh ${SITE}
+
+      - name: Post-deploy status
+        run: |
+          kubectl get pods -n ibm-mq
+          kubectl get svc -n ibm-mq mq-ha-service
+
+  cd_deploy_site_b_k8s_only:
+    if: github.event_name == 'workflow_dispatch' && (inputs.action == 'deploy-k8s-site-b' || inputs.action == 'deploy-k8s-both')
+    needs: ci
     runs-on: ubuntu-latest
     env:
       SITE: site-b
