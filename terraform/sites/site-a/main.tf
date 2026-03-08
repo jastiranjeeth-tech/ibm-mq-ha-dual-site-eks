@@ -128,7 +128,7 @@ module "ebs_csi_driver_irsa" {
 resource "aws_eks_addon" "ebs_csi_driver" {
   cluster_name             = module.eks.cluster_name
   addon_name               = "aws-ebs-csi-driver"
-  addon_version            = "v1.25.0-eksbuild.1"
+  addon_version            = "v1.53.0-eksbuild.1"
   service_account_role_arn = module.ebs_csi_driver_irsa.iam_role_arn
 
   depends_on = [module.eks, module.ebs_csi_driver_irsa]
