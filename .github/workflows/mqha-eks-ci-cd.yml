@@ -209,12 +209,51 @@ jobs:
             --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
             --access-scope type=cluster || true
 
+          echo "Waiting for EKS access policy association to be visible..."
+          for i in {1..12}; do
+            POLICY_COUNT=$(aws eks list-associated-access-policies \
+              --cluster-name "$CLUSTER_NAME" \
+              --principal-arn "$PRINCIPAL_ARN" \
+              --query "length(associatedAccessPolicies[?policyArn=='arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy'])" \
+              --output text 2>/dev/null || echo 0)
+
+            if [ "$POLICY_COUNT" = "1" ]; then
+              echo "EKS access policy association confirmed."
+              break
+            fi
+
+            echo "Policy not visible yet, retrying... ($i/12)"
+            sleep 10
+          done
+
+          if [ "$POLICY_COUNT" != "1" ]; then
+            echo "ERROR: EKS access policy association not found for ${PRINCIPAL_ARN}"
+            exit 1
+          fi
+
       - name: Update kubeconfig
         run: |
           CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
           kubectl config current-context
-          kubectl cluster-info
+
+          echo "Waiting for Kubernetes RBAC authorization..."
+          AUTH_OK="no"
+          for i in {1..18}; do
+            AUTH_OK=$(kubectl auth can-i create namespaces 2>/dev/null || echo no)
+            if [ "$AUTH_OK" = "yes" ]; then
+              echo "Kubernetes authorization confirmed."
+              break
+            fi
+
+            echo "RBAC not ready yet, retrying... ($i/18)"
+            sleep 10
+          done
+
+          if [ "$AUTH_OK" != "yes" ]; then
+            echo "ERROR: kubectl still not authorized for cluster operations"
+            exit 1
+          fi
 
       - name: Deploy MQ manifests for site-a
         run: |
@@ -308,12 +347,51 @@ jobs:
             --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
             --access-scope type=cluster || true
 
+          echo "Waiting for EKS access policy association to be visible..."
+          for i in {1..12}; do
+            POLICY_COUNT=$(aws eks list-associated-access-policies \
+              --cluster-name "$CLUSTER_NAME" \
+              --principal-arn "$PRINCIPAL_ARN" \
+              --query "length(associatedAccessPolicies[?policyArn=='arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy'])" \
+              --output text 2>/dev/null || echo 0)
+
+            if [ "$POLICY_COUNT" = "1" ]; then
+              echo "EKS access policy association confirmed."
+              break
+            fi
+
+            echo "Policy not visible yet, retrying... ($i/12)"
+            sleep 10
+          done
+
+          if [ "$POLICY_COUNT" != "1" ]; then
+            echo "ERROR: EKS access policy association not found for ${PRINCIPAL_ARN}"
+            exit 1
+          fi
+
       - name: Update kubeconfig
         run: |
           CLUSTER_NAME=$(terraform -chdir=terraform/sites/${SITE} output -raw cluster_name)
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
           kubectl config current-context
-          kubectl cluster-info
+
+          echo "Waiting for Kubernetes RBAC authorization..."
+          AUTH_OK="no"
+          for i in {1..18}; do
+            AUTH_OK=$(kubectl auth can-i create namespaces 2>/dev/null || echo no)
+            if [ "$AUTH_OK" = "yes" ]; then
+              echo "Kubernetes authorization confirmed."
+              break
+            fi
+
+            echo "RBAC not ready yet, retrying... ($i/18)"
+            sleep 10
+          done
+
+          if [ "$AUTH_OK" != "yes" ]; then
+            echo "ERROR: kubectl still not authorized for cluster operations"
+            exit 1
+          fi
 
       - name: Deploy MQ manifests for site-b
         run: |

@@ -212,6 +212,40 @@ Create:
 - `site-a-destroy-approval`
 - `site-b-destroy-approval`
 
+## 5.6 One-time local kubectl authorization (EKS Access Entries)
+
+If kubeconfig context is created but `kubectl` returns `the server has asked for the client to provide credentials`, add EKS access for your local IAM principal.
+
+```bash
+# Site A
+aws eks create-access-entry \
+        --cluster-name mq-ha-site-a \
+        --region us-east-1 \
+        --principal-arn arn:aws:iam::831488932214:root \
+        --type STANDARD || true
+
+aws eks associate-access-policy \
+        --cluster-name mq-ha-site-a \
+        --region us-east-1 \
+        --principal-arn arn:aws:iam::831488932214:root \
+        --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+        --access-scope type=cluster
+
+# Site B
+aws eks create-access-entry \
+        --cluster-name mq-ha-site-b \
+        --region us-west-2 \
+        --principal-arn arn:aws:iam::831488932214:root \
+        --type STANDARD || true
+
+aws eks associate-access-policy \
+        --cluster-name mq-ha-site-b \
+        --region us-west-2 \
+        --principal-arn arn:aws:iam::831488932214:root \
+        --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+        --access-scope type=cluster
+```
+
 ---
 
 ## 6) Deploy Operations (GitHub Actions)
@@ -245,6 +279,8 @@ Workflow action options:
 
 ```bash
 aws eks update-kubeconfig --name mq-ha-site-a --region us-east-1
+kubectl config use-context arn:aws:eks:us-east-1:831488932214:cluster/mq-ha-site-a
+kubectl config current-context
 kubectl get nodes
 kubectl get pods -n ibm-mq -o wide
 kubectl get svc -n ibm-mq
@@ -255,6 +291,8 @@ kubectl get pvc -n ibm-mq
 
 ```bash
 aws eks update-kubeconfig --name mq-ha-site-b --region us-west-2
+kubectl config use-context arn:aws:eks:us-west-2:831488932214:cluster/mq-ha-site-b
+kubectl config current-context
 kubectl get nodes
 kubectl get pods -n ibm-mq -o wide
 kubectl get svc -n ibm-mq
