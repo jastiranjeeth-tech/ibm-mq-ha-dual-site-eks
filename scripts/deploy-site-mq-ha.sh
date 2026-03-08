@@ -31,6 +31,14 @@ kubectl "${KCTX_ARGS[@]}" apply -f "${K8S_DIR}/namespace.yaml"
 kubectl "${KCTX_ARGS[@]}" apply -f "${K8S_DIR}/storage-class.yaml"
 kubectl "${KCTX_ARGS[@]}" apply -f "${K8S_DIR}/mq-configmap.yaml"
 kubectl "${KCTX_ARGS[@]}" apply -f "${K8S_DIR}/mq-secret.yaml"
+
+# Check if StatefulSet exists and delete it if volumeClaimTemplates changed
+if kubectl "${KCTX_ARGS[@]}" get statefulset mq-ha -n ibm-mq &>/dev/null; then
+  echo "⚠️  StatefulSet exists. Deleting to allow volumeClaimTemplates update..."
+  kubectl "${KCTX_ARGS[@]}" delete statefulset mq-ha -n ibm-mq --cascade=orphan
+  echo "✓ StatefulSet deleted (pods preserved)"
+fi
+
 kubectl "${KCTX_ARGS[@]}" apply -f "${K8S_DIR}/mq-statefulset.yaml"
 
 echo ""

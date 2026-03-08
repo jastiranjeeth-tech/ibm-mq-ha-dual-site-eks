@@ -96,6 +96,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /mnt/mqm
+            - name: data
+              mountPath: /mnt/mqm-data
+            - name: log
+              mountPath: /mnt/mqm-log
             - name: config
               mountPath: /etc/mqm/20-config.mqsc
               subPath: mqsc.ini
@@ -129,6 +133,15 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: mq-storage
+        resources:
+          requests:
+            storage: 10Gi
+    - metadata:
+        name: log
       spec:
         accessModes:
           - ReadWriteOnce
