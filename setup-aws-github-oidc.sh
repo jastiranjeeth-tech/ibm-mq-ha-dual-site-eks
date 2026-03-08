@@ -65,11 +65,17 @@ cat > additional-permissions.json <<EOF
 }
 EOF
 
-echo "Creating additional permissions policy..."
+echo "Creating IAM permissions policy..."
 aws iam put-role-policy \
   --role-name GitHubActionsEKSRole \
   --policy-name EKSAdditionalPermissions \
   --policy-document file://additional-permissions.json
+
+echo "Creating KMS and Logs permissions policy..."
+aws iam put-role-policy \
+  --role-name GitHubActionsEKSRole \
+  --policy-name KMSandLogsPermissions \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["kms:*","logs:*"],"Resource":"*"}]}'
 
 # Attach policies
 echo "Attaching managed policies..."

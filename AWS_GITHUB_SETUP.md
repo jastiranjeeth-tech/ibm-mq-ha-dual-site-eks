@@ -47,7 +47,7 @@ aws iam create-role \
 
 ## Step 3: Attach Policies to the Role
 
-Attach necessary policies for EKS, EC2, VPC, and Route53:
+Attach necessary policies for EKS, EC2, VPC, Route53, KMS, and CloudWatch Logs:
 
 ```bash
 # EKS Full Access
@@ -69,6 +69,17 @@ aws iam attach-role-policy \
 aws iam attach-role-policy \
   --role-name GitHubActionsEKSRole \
   --policy-arn arn:aws:iam::aws:policy/IAMFullAccess
+
+# Additional inline policies for KMS and Logs
+aws iam put-role-policy \
+  --role-name GitHubActionsEKSRole \
+  --policy-name KMSandLogsPermissions \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["kms:*","logs:*"],"Resource":"*"}]}'
+
+aws iam put-role-policy \
+  --role-name GitHubActionsEKSRole \
+  --policy-name EKSAdditionalPermissions \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["iam:GetRole","iam:ListAttachedRolePolicies","iam:GetRolePolicy","sts:GetCallerIdentity"],"Resource":"*"}]}'
 ```
 
 **OR** create a custom policy with minimum required permissions:
