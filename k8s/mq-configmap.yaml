@@ -4,6 +4,16 @@ metadata:
   name: mq-ha-config
   namespace: ibm-mq
 data:
+  qm.ini: |
+    NativeHAInstance:
+      Name=mq-ha-0
+      ReplicationAddress=mq-ha-0.mq-ha-headless.ibm-mq.svc.cluster.local(1414)
+    NativeHAInstance:
+      Name=mq-ha-1
+      ReplicationAddress=mq-ha-1.mq-ha-headless.ibm-mq.svc.cluster.local(1414)
+    NativeHAInstance:
+      Name=mq-ha-2
+      ReplicationAddress=mq-ha-2.mq-ha-headless.ibm-mq.svc.cluster.local(1414)
   mqsc.ini: |
     DEFINE QLOCAL(TEST.QUEUE) REPLACE
     DEFINE QLOCAL(DEV.QUEUE.1) REPLACE

@@ -32,6 +32,12 @@ retry_destroy() {
   return 1
 }
 
+# Step 0: Initialize Terraform backend
+echo "STEP 0: Initializing Terraform Backend"
+echo "=========================================="
+terraform -chdir=terraform/sites/${SITE} init -upgrade
+echo ""
+
 # Step 1: Show what will be deleted
 echo "STEP 1: Resources that will be DESTROYED"
 echo "=========================================="
@@ -41,7 +47,6 @@ echo ""
 # Step 2: Run destroy
 echo "STEP 2: Running Terraform Destroy"
 echo "=========================================="
-terraform -chdir=terraform/sites/${SITE} init
 retry_destroy
 echo ""
 

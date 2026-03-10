@@ -28,6 +28,7 @@ metadata:
   namespace: ibm-mq
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app: mq-ha
   ports:
@@ -46,6 +47,7 @@ metadata:
 spec:
   serviceName: mq-ha-headless
   replicas: 3
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: mq-ha
@@ -65,6 +67,15 @@ spec:
                     values:
                       - mq-ha
               topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: volume-permissions
+          image: busybox:latest
+          command: ['sh', '-c', 'chown -R 1001:root /mnt/mqm /mnt/mqm-log && chmod -R 775 /mnt/mqm /mnt/mqm-log']
+          volumeMounts:
+            - name: data
+              mountPath: /mnt/mqm
+            - name: log
+              mountPath: /mnt/mqm-log
       containers:
         - name: mq
           image: icr.io/ibm-messaging/mq:latest
@@ -74,8 +85,6 @@ spec:
               value: "accept"
             - name: MQ_QMGR_NAME
               value: "QMHA_B"
-            - name: MQ_MULTI_INSTANCE
-              value: "true"
             - name: MQ_NATIVE_HA
               value: "true"
             - name: MQ_ADMIN_PASSWORD
@@ -96,13 +105,14 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /mnt/mqm
-            - name: data
-              mountPath: /mnt/mqm-data
             - name: log
               mountPath: /mnt/mqm-log
             - name: config
               mountPath: /etc/mqm/20-config.mqsc
               subPath: mqsc.ini
+            - name: config
+              mountPath: /etc/mqm/qm.ini
+              subPath: qm.ini
           resources:
             requests:
               cpu: 500m
